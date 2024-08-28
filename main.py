@@ -235,7 +235,7 @@ while running:
         if uid is not my_uid:
             client.rect.center = client_inputs[uid][1]
 
-    # Логіка Fireball
+    # Логіка Fireballss
     for fireball in fireballs:
         fireball.update()
 
