@@ -1,4 +1,5 @@
 from random import randint, uniform, choice
+import server
 
 import pygame
 
@@ -12,9 +13,28 @@ display_surface = pygame.display.set_mode([SCREEN_WIDTH, SCREEN_HEIGHT])
 running = True
 clock = pygame.time.Clock()
 
+players = 0
+players_classes = {}
+my_uid = 0
+
+colors = {
+    0: (125, 0, 0, 0),
+    1: (0, 125, 0, 0),
+    2: (0, 0, 125, 0),
+    3: (0, 125, 125, 0)
+}
+
 
 class Player:
-    def __init__(self, image_size, speed):
+    def __init__(self, image_size, speed, is_copy):
+        global my_uid
+        self.is_copy = is_copy
+        if not self.is_copy:
+            self.client = server.Client(int(input("Host?")))
+            self.client.serverclient.connect("tcp://127.0.0.1:4242")
+            self.uid = self.client.serverclient.get_client_uid()
+            my_uid = self.uid
+        self.color = (0, 0, 0, 0)
         self.walk_frames = []
         for _ in range(4):
             frame = pygame.image.load(f'images/Player/Player_Run_{_ + 1}.png').convert_alpha()
@@ -40,25 +60,23 @@ class Player:
         self.can_shoot = True
         self.last_shot = 0
 
-    def move(self, kb):
-        self.direction.x = int(kb[pygame.K_RIGHT]) - int(kb[pygame.K_LEFT])
-        self.direction.y = int(kb[pygame.K_DOWN]) - int(kb[pygame.K_UP])
+    def move(self, direction):
+        self.direction = direction
+        self.flipped_surf = pygame.transform.flip(self.surf, self.is_flipped, False)
+        if not self.is_copy:
+            if self.rect.left <= 0:
+                self.rect.left = 0
+            if self.rect.right >= SCREEN_WIDTH:
+                self.rect.right = SCREEN_WIDTH
+            if self.rect.top <= 0:
+                self.rect.top = 0
+            if self.rect.bottom >= SCREEN_HEIGHT:
+                self.rect.bottom = SCREEN_HEIGHT
 
-        # Обмеження руху Гравця
-        if self.rect.left <= 0:
-            self.rect.left = 0
-        if self.rect.right >= SCREEN_WIDTH:
-            self.rect.right = SCREEN_WIDTH
-        if self.rect.top <= 0:
-            self.rect.top = 0
-        if self.rect.bottom >= SCREEN_HEIGHT:
-            self.rect.bottom = SCREEN_HEIGHT
-
-        # Рух Гравця
-        if self.direction:
-            self.direction = self.direction.normalize()
-        self.rect.center += self.direction * self.speed * dt
-        self.flipped_surf = pygame.transform.flip(player.surf, player.is_flipped, False)
+            # Рух Гравця
+            if self.direction:
+                self.direction = self.direction.normalize()
+            self.rect.center += self.direction * self.speed * dt
 
     def flip(self):
         # Flip Гравця
@@ -71,7 +89,6 @@ class Player:
         if self.direction:
             self.frame_index += 10 * dt
             self.surf = self.walk_frames[int(self.frame_index) % 4]
-
         else:
             self.frame_index = 0
             self.surf = self.idle
@@ -151,8 +168,6 @@ class Waterball:
         del self
 
 
-player = Player([80, 80], 500)
-
 fireballs = []
 
 fireball_event = pygame.event.custom_type()
@@ -182,9 +197,20 @@ def display_score():
     pygame.draw.rect(display_surface, (240, 240, 240), score_rect.inflate(20, 12), 5, 10)
 
 
-while running:
-    dt = clock.tick() / 1000
+players_classes[my_uid] = Player([80, 80], 500, False)
+players_classes[my_uid].color = colors[my_uid]
+players += 1
 
+while running:
+    player = players_classes[my_uid]
+    if len(player.client.serverclient.get_client_inputs()) != players:
+        players += 1
+        for i in range(players):
+            if i not in players_classes.keys():
+                players_classes[i] = Player([80, 80], 500, True)
+                players_classes[i].color = colors[i]
+
+    dt = clock.tick() / 1000
     # Цикл Подій
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -196,8 +222,18 @@ while running:
             waterballs.append(Waterball(player.rect.center))
 
     # Оброблюємо власні алгоритми
+    direction = [0, 0]
     keys = pygame.key.get_pressed()
-    player.update(keys)
+    direction[0] = int(keys[pygame.K_RIGHT]) - int(keys[pygame.K_LEFT])
+    direction[1] = int(keys[pygame.K_DOWN]) - int(keys[pygame.K_UP])
+    player.client.serverclient.update_client_data(my_uid, [direction, player.rect.center])
+
+    client_inputs = player.client.serverclient.get_client_inputs()
+    for uid, client in players_classes.items():
+        client_direction = pygame.Vector2(client_inputs[uid][0])
+        client.update(client_direction)
+        if uid is not my_uid:
+            client.rect.center = client_inputs[uid][1]
 
     # Логіка Fireball
     for fireball in fireballs:
@@ -206,7 +242,9 @@ while running:
     # Малюємо Гру
     display_surface.fill('black')
     display_score()
-    display_surface.blit(player.flipped_surf, player.rect)
+    for uid, player in players_classes.items():
+        player.surf.fill(player.color, special_flags=pygame.BLEND_RGBA_ADD)
+        display_surface.blit(player.flipped_surf, player.rect)
 
     for waterball in waterballs:
         display_surface.blit(waterball.surf, waterball.rect)
@@ -214,8 +252,8 @@ while running:
 
     for fireball in fireballs:
         display_surface.blit(fireball.surf, fireball.rect)
-        if player.rect.colliderect(fireball.rect):
-            running = False
+        # if player.rect.colliderect(fireball.rect):
+        #     running = True
         for waterball in waterballs:
             if waterball.rect.colliderect(fireball.rect):
                 waterball.destroy()
