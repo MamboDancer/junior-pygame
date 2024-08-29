@@ -5,8 +5,8 @@ import pygame
 
 pygame.init()
 
-SCREEN_WIDTH = 1280
-SCREEN_HEIGHT = 720
+SCREEN_WIDTH = int(1280 / 1.2)
+SCREEN_HEIGHT = int(720 / 1.2)
 
 display_surface = pygame.display.set_mode([SCREEN_WIDTH, SCREEN_HEIGHT])
 
@@ -29,9 +29,11 @@ class Player:
     def __init__(self, image_size, speed, is_copy):
         global my_uid
         self.is_copy = is_copy
+        self.is_host = False
         if not self.is_copy:
-            self.client = server.Client(int(input("Host?")))
-            self.client.serverclient.connect("tcp://127.0.0.1:4242")
+            self.is_host = int(input("Host?"))
+            self.client = server.Client(self.is_host)
+            self.client.serverclient.connect(f"tcp://{input('Enter ip address: ')}:4242")
             self.uid = self.client.serverclient.get_client_uid()
             my_uid = self.uid
         self.color = (0, 0, 0, 0)
@@ -115,12 +117,13 @@ class Player:
 
 class Fireball:
     def __init__(self, size):
+        self.uid = randint(0, 9999999)
         self.surf = pygame.image.load('images/Fireball/Fireball_1.png').convert_alpha()
         self.surf = pygame.transform.scale(self.surf, size)
         self.rotated = self.surf
         self.rect = self.surf.get_frect()
         self.direction = pygame.Vector2(uniform(-0.5, 0.5), 1)
-        self.speed = randint(150, 400)
+        self.speed = randint(150, 200)
         self.rect.left = randint(0, SCREEN_WIDTH)
         self.rect.top = -100
         self.rotation = 0
@@ -140,6 +143,8 @@ class Fireball:
     def destroy(self):
         index = fireballs.index(self)
         fireballs.pop(index)
+        if player.is_host:
+            player.client.serverclient.remove_fireball(index)
         del self
 
 
@@ -171,7 +176,7 @@ class Waterball:
 fireballs = []
 
 fireball_event = pygame.event.custom_type()
-pygame.time.set_timer(fireball_event, 500)
+pygame.time.set_timer(fireball_event, 1000)
 
 score_font = pygame.font.Font(None, 40)
 
@@ -189,8 +194,12 @@ for i in range(6):
 waterballs = []
 
 
-def display_score():
-    ctime = pygame.time.get_ticks() // 100
+def display_score(is_host):
+    if is_host:
+        ctime = pygame.time.get_ticks() // 100
+        player.client.serverclient.set_score(ctime)
+    else:
+        ctime = player.client.serverclient.get_score()
     score_surf = score_font.render(str(ctime), True, (240, 240, 240))
     score_rect = score_surf.get_frect(midbottom=(SCREEN_WIDTH / 2, SCREEN_HEIGHT - 50))
     display_surface.blit(score_surf, score_rect)
@@ -203,6 +212,7 @@ players += 1
 
 while running:
     player = players_classes[my_uid]
+    running = player.client.serverclient.get_running()
     if len(player.client.serverclient.get_client_inputs()) != players:
         players += 1
         for i in range(players):
@@ -215,11 +225,38 @@ while running:
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             running = False
-        if event.type == fireball_event:
+        if event.type == fireball_event and player.is_host:
             randsize = randint(30, 80)
-            fireballs.append(Fireball([randsize, randsize]))
-        if event.type == pygame.MOUSEBUTTONDOWN and player.shoot():
-            waterballs.append(Waterball(player.rect.center))
+            new_fireball = Fireball([randsize, randsize])
+            fireballs.append(new_fireball)
+            player.client.serverclient.set_fireball([randsize, randsize],
+                                                    [new_fireball.direction[0], new_fireball.direction[1]],
+                                                    new_fireball.speed,
+                                                    new_fireball.rect.left,
+                                                    new_fireball.rotation_direction,
+                                                    new_fireball.rect.center,
+                                                    new_fireball.uid)
+        # if event.type == pygame.MOUSEBUTTONDOWN and player.shoot():
+        #     waterballs.append(Waterball(player.rect.center))
+
+    if not player.is_host:
+        server_fireballs = player.client.serverclient.get_fireballs()
+        for i in range(len(server_fireballs)):
+            size, direction, speed, start_pos, rot_dir, pos, uid = server_fireballs[i]
+            if i >= len(fireballs):
+                fb = Fireball(size)
+                fb.uid = uid
+                fb.direction = pygame.Vector2(direction)
+                fb.speed = speed
+                fb.rect.left = start_pos
+                fb.rotation_direction = rot_dir
+                fireballs.append(fb)
+            else:
+                for fb in fireballs:
+                    if fb.uid == uid:
+                        fb.rect.center = pos
+    else:
+        player.client.serverclient.update_fireballs([f.rect.center for f in fireballs])
 
     # Оброблюємо власні алгоритми
     direction = [0, 0]
@@ -241,7 +278,8 @@ while running:
 
     # Малюємо Гру
     display_surface.fill('black')
-    display_score()
+    display_score(player.is_host)
+
     for uid, player in players_classes.items():
         player.surf.fill(player.color, special_flags=pygame.BLEND_RGBA_ADD)
         display_surface.blit(player.flipped_surf, player.rect)
@@ -252,12 +290,12 @@ while running:
 
     for fireball in fireballs:
         display_surface.blit(fireball.surf, fireball.rect)
-        # if player.rect.colliderect(fireball.rect):
-        #     running = True
-        for waterball in waterballs:
-            if waterball.rect.colliderect(fireball.rect):
-                waterball.destroy()
-                fireball.destroy()
+        if players_classes[my_uid].rect.colliderect(fireball.rect):
+            players_classes[my_uid].client.serverclient.set_running(True)
+        # for waterball in waterballs:
+        #     if waterball.rect.colliderect(fireball.rect):
+        #         waterball.destroy()
+        #         fireball.destroy(player)
 
     pygame.display.update()
 
